@@ -60,24 +60,55 @@ for drop_date in $(ls -1 "${DROPS_DIR}" | sort); do
   tmpdir="$(mktemp -d)"
   tar -xzf "${archive}" -C "${tmpdir}"
 
-  # Heuristic: find kernel root inside extracted content.
-  # Many drops contain a top folder; we locate by presence of Makefile + Kconfig.
+# 1) Determine "drop_root" (handle wrapper directory)
+drop_root="${tmpdir}"
+# If there's exactly one top-level directory and no top-level files, descend into it
+top_entries=("${tmpdir}"/*)
+if [[ ${#top_entries[@]} -eq 1 && -d "${top_entries[0]}" ]]; then
+  drop_root="${top_entries[0]}"
+fi
+
+# 2) Detect Kleaf era layout: kernel/ + kernel-*
+has_kernel_dir=0
+has_kernel_dash_dir=0
+
+if [[ -d "${drop_root}/kernel" ]]; then
+  has_kernel_dir=1
+fi
+
+shopt -s nullglob
+kernel_dash_candidates=("${drop_root}"/kernel-*)
+shopt -u nullglob
+if [[ ${#kernel_dash_candidates[@]} -gt 0 ]]; then
+  has_kernel_dash_dir=1
+fi
+
+# 3) Choose what to import
+import_root=""
+
+if [[ ${has_kernel_dir} -eq 1 && ${has_kernel_dash_dir} -eq 1 ]]; then
+  # New Samsung layout: keep BOTH kernel source and kleaf/build scaffolding
+  import_root="${drop_root}"
+else
+  # Old layout: find the actual kernel root (Makefile + Kconfig)
   kernel_root=""
   while IFS= read -r -d '' d; do
     if [[ -f "${d}/Makefile" && -f "${d}/Kconfig" ]]; then
       kernel_root="${d}"
       break
     fi
-  done < <(find "${tmpdir}" -maxdepth 4 -type d -print0)
+  done < <(find "${drop_root}" -maxdepth 6 -type d -print0)
 
   if [[ -z "${kernel_root}" ]]; then
     echo "ERROR: Could not locate kernel root (Makefile+Kconfig) inside ${base}"
     rm -rf "${tmpdir}"
     exit 1
   fi
+  import_root="${kernel_root}"
+fi
 
-  # Sync extracted kernel into repo
-  rsync -a --delete "${EXCLUDES[@]}" "${kernel_root}/" "${REPO_DIR}/"
+# 4) Import
+rsync -a --delete "${EXCLUDES[@]}" "${import_root}/" "${REPO_DIR}/"
 
   rm -rf "${tmpdir}"
 
